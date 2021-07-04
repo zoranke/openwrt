@@ -1,10 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 #
 # Copyright (C) 2006-2010 OpenWrt.org
 # Copyright (C) 2016 LEDE Project
-#
-# This is free software, licensed under the GNU General Public License v2.
-# See /LICENSE for more information.
-#
 
 ifneq ($(__rules_inc),1)
 __rules_inc=1
@@ -76,13 +73,13 @@ IS_PACKAGE_BUILD := $(if $(filter package/%,$(BUILD_SUBDIR)),1)
 
 OPTIMIZE_FOR_CPU=$(subst i386,i486,$(ARCH))
 
-ifeq ($(ARCH),powerpc)
-  FPIC:=-fPIC
+ifneq (,$(findstring $(ARCH) , aarch64 aarch64_be powerpc ))
+  FPIC:=-DPIC -fPIC
 else
-  FPIC:=-fpic
+  FPIC:=-DPIC -fpic
 endif
 
-HOST_FPIC:=-fPIC
+HOST_FPIC:=-DPIC -fPIC
 
 ARCH_SUFFIX:=$(call qstrip,$(CONFIG_CPU_TYPE))
 GCC_ARCH:=
@@ -338,6 +335,12 @@ else
     $(SCRIPT_DIR)/rstrip.sh
 endif
 
+NINJA = \
+	MAKEFLAGS="$(MAKE_JOBSERVER)" \
+	$(STAGING_DIR_HOST)/bin/ninja \
+		$(if $(findstring c,$(OPENWRT_VERBOSE)),-v) \
+		$(if $(MAKE_JOBSERVER),,-j1)
+
 ifeq ($(CONFIG_IPV6),y)
   DISABLE_IPV6:=
 else
@@ -426,6 +429,8 @@ $(shell \
   fi; \
 )
 endef
+
+abi_version_str = $(subst -,,$(subst _,,$(subst .,,$(1))))
 
 COMMITCOUNT = $(if $(DUMP),0,$(call commitcount))
 AUTORELEASE = $(if $(DUMP),0,$(call commitcount,1))
