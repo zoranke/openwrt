@@ -299,23 +299,15 @@ void load_feature_buf_from_file(char **config_buf)
 		filp_close(fp, NULL);
 		return;
 	}
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(5,7,19)
 	fs = get_fs();
 	set_fs(KERNEL_DS);
-#endif
-	
 // 4.14rc3 vfs_read-->kernel_read
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
 	kernel_read(fp, *config_buf, size, &(fp->f_pos));
 #else
 	vfs_read(fp, *config_buf, size, &(fp->f_pos));
 #endif
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(5,7,19)
 	set_fs(fs);
-#endif
-
 	filp_close(fp, NULL);
 }
 
@@ -935,22 +927,16 @@ void TEST_cJSON(void)
 
 
 struct timer_list oaf_timer;   
-int report_flag = 0;
-#define OAF_TIMER_INTERVAL 1
+
+#define OAF_TIMER_INTERVAL 60
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
 static void oaf_timer_func(struct timer_list *t)
 #else
 static void oaf_timer_func(unsigned long ptr)
 #endif
 {
-	static int count = 0;
-	if (count % 60 == 0)
-		check_client_expire();
-	if (count % 60 == 0 || report_flag){
-		report_flag = 0;
-		af_visit_info_report();
-	}
-	count++;
+	check_client_expire();
+	af_visit_info_timer_handle();
     mod_timer(&oaf_timer,  jiffies + OAF_TIMER_INTERVAL * HZ);
 }
 
@@ -975,7 +961,12 @@ void fini_oaf_timer(void)
 
 static struct sock *oaf_sock = NULL;
 
-
+struct af_msg_hdr{
+    int magic;
+    int len;
+};
+#define OAF_NETLINK_ID 29
+#define MAX_OAF_NL_MSG_LEN 1024
 int af_send_msg_to_user(char *pbuf, uint16_t len)
 {
     struct sk_buff *nl_skb;
@@ -1012,51 +1003,30 @@ int af_send_msg_to_user(char *pbuf, uint16_t len)
     ret = netlink_unicast(oaf_sock, nl_skb, 999, MSG_DONTWAIT);
     return ret;
 }
-#define MAX_OAF_NETLINK_MSG_LEN 1024
 
-static void oaf_user_msg_handle(af_msg_t *msg){
-	printk("oaf msg handle, action = %d\n", msg->action);
-	switch(msg->action){
-		case AF_MSG_INIT:
-			printk("module init.........\n");
-			af_client_list_reset_report_num();
-			report_flag = 1;
-			break;
-		default:
-			break;
-	}
-}
 static void oaf_msg_rcv(struct sk_buff *skb)
 {
     struct nlmsghdr *nlh = NULL;
     char *umsg = NULL;
-	printk("recv user msg\n");
+    char *kmsg = "ok";
+
     if(skb->len >= nlmsg_total_size(0))
     {
         nlh = nlmsg_hdr(skb);
         umsg = NLMSG_DATA(nlh);
-
-		struct af_msg_hdr *af_hdr = (struct af_msg_hdr *)umsg;
-		if (af_hdr->magic != 0xa0b0c0d0){
-			printk("magic error %x\n", af_hdr->magic);
-			return;
-		}
-		if (af_hdr->len <= 0 || af_hdr->len >= MAX_OAF_NETLINK_MSG_LEN){
-			printk("data len error\n");
-			return;
-		}
-		void *udata = umsg + sizeof(struct af_msg_hdr);
-
-        if(udata)
-        	oaf_user_msg_handle((af_msg_t *)udata);
+        if(umsg)
+        {
+            AF_INFO("kernel recv from user: %s\n", umsg);
+            af_send_msg_to_user(kmsg, strlen(kmsg));
+        }
     }
 }
 
 int netlink_oaf_init(void)
 {
-    struct netlink_kernel_cfg nl_cfg = {0};
-    nl_cfg.input = oaf_msg_rcv;
-    oaf_sock = netlink_kernel_create(&init_net, OAF_NETLINK_ID, &nl_cfg);
+    struct netlink_kernel_cfg bm_nl_cfg = {0};
+    bm_nl_cfg.input = oaf_msg_rcv;
+    oaf_sock = netlink_kernel_create(&init_net, OAF_NETLINK_ID, &bm_nl_cfg);
 
     if (NULL == oaf_sock)
     {

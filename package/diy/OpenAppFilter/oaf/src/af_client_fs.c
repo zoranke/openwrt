@@ -95,7 +95,7 @@ static void *af_client_seq_next(struct seq_file *s, void *v, loff_t *pos)
 
 static void af_client_seq_stop(struct seq_file *s, void *v)
 {	
-//	seq_printf(s, "%s", "]");
+	seq_printf(s, "%s", "]");
 	AF_CLIENT_UNLOCK_R();
 }
 
@@ -104,21 +104,73 @@ static int af_client_seq_show(struct seq_file *s, void *v)
     unsigned char mac_str[32] = {0};
 	unsigned char ip_str[32] = {0};
 	static int index = 0;
+	int i;
+	int j;
+	cJSON *visit_info_array = NULL;
+	cJSON *root_obj = NULL;
+	cJSON *visit_obj = NULL;
+	cJSON *history_array = NULL;
+	cJSON *history_obj = NULL;
+	char *out = NULL;
 	af_client_info_t *node = (af_client_info_t *)v;
+
     if (v == SEQ_START_TOKEN) {
 		index = 0;
-		seq_printf(s, "%-4s %-20s %-20s\n", "Id", "Mac", "Ip");
+		seq_printf(s, "%s", "[");
         return 0;
     }
-//	if(index > 0)
-	//	seq_printf(s, "%s", ",");
+	if(index > 0)
+		seq_printf(s, "%s", ",");
 	index++;
+
+	root_obj = cJSON_CreateObject();
+	if(!root_obj){
+		AF_ERROR("create json obj failed");
+		return 0;
+	}
 	sprintf(mac_str, MAC_FMT, MAC_ARRAY(node->mac));
 	sprintf(ip_str, "%pI4", &node->ip);
-	seq_printf(s, "%-4d %-20s %-20s\n", index, mac_str, ip_str);
+	cJSON_AddStringToObject(root_obj, "mac", mac_str);
+	cJSON_AddStringToObject(root_obj, "ip", ip_str);
+	cJSON_AddNumberToObject(root_obj, "app_num", node->visit_app_num);
+	visit_info_array = cJSON_CreateArray();
+
+	for(i = 0; i < MAX_RECORD_APP_NUM; i++){
+		if(node->visit_info[i].app_id == 0)
+			continue;
+		if(node->visit_info[i].total_num < 3)
+			continue;
+		visit_obj = cJSON_CreateObject();
+		cJSON_AddNumberToObject(visit_obj, "appid", node->visit_info[i].app_id);
+		cJSON_AddNumberToObject(visit_obj, "latest_action", node->visit_info[i].latest_action);
+		cJSON_AddNumberToObject(visit_obj, "latest_time", node->visit_info[i].latest_time);
+		cJSON_AddNumberToObject(visit_obj, "total_num", node->visit_info[i].total_num);
+		cJSON_AddNumberToObject(visit_obj, "drop_num", node->visit_info[i].drop_num);
+		history_array = cJSON_CreateArray();
+		for(j = 0; j < MAX_VISIT_HISTORY_TIME; j++){
+			if(node->visit_info[i].history_time[j] <= 0)
+				continue;
+			history_obj = cJSON_CreateObject();
+			cJSON_AddNumberToObject(visit_obj, "action", node->visit_info[i].history_time[j]);
+			cJSON_AddNumberToObject(visit_obj, "time", node->visit_info[i].action[j]);
+			cJSON_AddItemToArray(history_array, history_obj);
+		}
+		
+		cJSON_AddItemToObject(visit_obj, "history_info", history_array);
+		cJSON_AddItemToArray(visit_info_array, visit_obj);
+	}
+	
+	cJSON_AddItemToObject(root_obj, "visit_info", visit_info_array);
+	out = cJSON_Print(root_obj);
+	if(!out)
+		return 0;
+	cJSON_Minify(out);
+	seq_printf(s, "%s", out);
+	kfree(out);
+
+    cJSON_Delete(root_obj);
     return 0;
 }
-
 
 static const struct seq_operations nf_client_seq_ops = {
     .start = af_client_seq_start,
@@ -149,8 +201,6 @@ static int af_client_open(struct inode *inode, struct file *file)
     return 0;
 }
 
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(5,5,0)
 static const struct file_operations af_client_fops = {
     .owner      = THIS_MODULE,
     .open       = af_client_open,
@@ -158,15 +208,7 @@ static const struct file_operations af_client_fops = {
     .llseek     = seq_lseek,
     .release    = seq_release_private,
 };
-#else
-static const struct proc_ops af_client_fops = {
-	.proc_flags	= PROC_ENTRY_PERMANENT,
-	.proc_read	= seq_read,
-	.proc_open	= af_client_open,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release_private,
-};
-#endif
+
 
 #define AF_CLIENT_PROC_STR "af_client"
 
@@ -175,10 +217,7 @@ int init_af_client_procfs(void)
 {
     struct proc_dir_entry *pde;
     struct net *net = &init_net;
-   // pde = proc_create(AF_CLIENT_PROC_STR, 0440, net->proc_net, &af_client_fops);
-	
-	pde = proc_create(AF_CLIENT_PROC_STR, 0440, net->proc_net, &af_client_fops);
-
+    pde = proc_create(AF_CLIENT_PROC_STR, 0440, net->proc_net, &af_client_fops);
     if (!pde) {
         AF_ERROR("nf_client proc file created error\n");
         return -1;
